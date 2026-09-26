@@ -1,0 +1,9 @@
+# Backups and logs this script writes next to itself. They hold personal
+# settings and belong to one machine, never to a public repository.
+*.zip
+*.log
+
+# Local assistant state and scratch copies.
+.memsearch/
+*.bak.*
+review-*.md
