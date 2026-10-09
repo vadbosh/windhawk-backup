@@ -11,11 +11,15 @@
 
 ## Быстрый старт
 
-1. Скачай `windhawk-backup.ps1` и `windhawk-backup.cmd` в одну папку,
-   например `C:\Tools\windhawk-backup`.
-2. Запусти `windhawk-backup.cmd` двойным кликом, подтверди UAC, нажми `1` —
+1. Создай папку `C:\Program Files\windhawk-backup`. Проводник запросит права
+   администратора.
+2. Скачай в эту папку `windhawk-backup.ps1` и `windhawk-backup.cmd`.
+3. Запусти `windhawk-backup.cmd` двойным кликом, подтверди UAC, нажми `1` —
    бэкап.
-3. ZIP появится рядом со скриптом.
+4. ZIP появится рядом со скриптом.
+
+Папку, в которую может писать обычный пользователь, скрипт не примет:
+[почему](#права-на-папку).
 
 На новой машине или после переустановки: поставь Windhawk, снова запусти
 `.cmd`, нажми `2`.
@@ -54,18 +58,18 @@ powershell -ExecutionPolicy Bypass -File .\windhawk-backup.ps1 Backup
 Так выглядит восстановление (пути условные, вывод настоящий):
 
 ```text
-Restoring from: C:\Tools\windhawk-backup\windhawk-backup_20260926_180525.zip
+Restoring from: C:\Program Files\windhawk-backup\windhawk-backup_20260926_180525.zip
 Continue? (y/N): y
 Stopping Windhawk service...
 Stopping windhawk.exe processes...
 Safety backup of the current state...
-Backup saved: C:\Tools\windhawk-backup\windhawk-backup_20260926_181357_pre-restore.zip
-Extracting C:\Tools\windhawk-backup\windhawk-backup_20260926_180525.zip ...
+Backup saved: C:\Program Files\windhawk-backup\windhawk-backup_20260926_181357_pre-restore.zip
+Extracting C:\Program Files\windhawk-backup\windhawk-backup_20260926_180525.zip ...
 Copying files to C:\ProgramData\Windhawk (38 unchanged file(s) skipped)...
 Importing HKLM\SOFTWARE\Windhawk ...
 Restore complete.
 Starting Windhawk service...
-Log: C:\Tools\windhawk-backup\windhawk-backup.log
+Log: C:\Program Files\windhawk-backup\windhawk-backup.log
 ```
 
 ## Что лежит в ZIP
@@ -91,6 +95,30 @@ Log: C:\Tools\windhawk-backup\windhawk-backup.log
 | `-WindhawkRoot` | `C:\ProgramData\Windhawk` | папка данных Windhawk |
 | `-Keep` | `10` | сколько бэкапов хранить; `0` — все |
 | `-Help`, `--help` | | полная справка с примерами |
+
+## Права на папку
+
+Скрипт работает с правами администратора: импортирует `Windhawk.reg` в `HKLM`
+и копирует DLL модов, которые Windhawk загружает во все процессы. Поэтому он
+отказывается работать, если обычный пользователь может менять папку скрипта,
+`-BackupDir`, файл из `-Path` или его папку. Иначе такой пользователь подложит
+свой ZIP и при следующем восстановлении получит права администратора. Писать
+туда могут только администраторы, SYSTEM и текущий пользователь.
+
+В новой папке прямо в `C:\` файлы может менять любой пользователь, вошедший в
+систему, поэтому `C:\Tools\windhawk-backup` скрипт не примет. Положи скрипт в
+`C:\Program Files\windhawk-backup` или закрой запись в существующую папку из
+консоли администратора. Сообщение об ошибке печатает эти команды с нужным
+путём:
+
+```powershell
+icacls "C:\Tools\windhawk-backup" /setowner *S-1-5-32-544
+icacls "C:\Tools\windhawk-backup" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"
+```
+
+При восстановлении скрипт также не распакует ZIP, в котором есть пути за
+пределы папки распаковки (`..\`), и не импортирует `Windhawk.reg` с ключами вне
+`HKLM\SOFTWARE\Windhawk`.
 
 ## Защита от потерь
 

@@ -26,6 +26,16 @@
                [-Clean: remove current mods] -> copy files back -> import registry ->
                start Windhawk.
 
+    SAFETY CHECKS
+      The script runs as administrator, so it refuses to work when its own folder, -BackupDir,
+      or the -Path file and its folder can be changed by accounts other than administrators,
+      SYSTEM and the current user. Otherwise a standard user could plant a ZIP whose registry
+      file and mod DLLs the restore would install with administrator rights. Keep the script
+      and backups in a folder such as C:\Program Files\windhawk-backup; the error message gives
+      the icacls commands to lock down an existing folder.
+      Restore also refuses a ZIP with entries outside the extraction folder, and a Windhawk.reg
+      that names any key outside HKLM\SOFTWARE\Windhawk.
+
     The script needs administrator rights and relaunches itself through UAC if needed.
     The relaunched window stays open (-NoExit) so the output can be read.
 
@@ -252,6 +262,105 @@ function Start-Windhawk {
     }
 }
 
+# --- Safety checks ----------------------------------------------------------
+
+# The script runs elevated and trusts what it finds in its own folder and in -BackupDir: it
+# imports Windhawk.reg into HKLM and copies mod DLLs that Windhawk injects into every process.
+# A folder a standard user can write to turns that into privilege escalation, so only these
+# accounts may write there. The current user is trusted as well (added at run time): UAC is
+# not a security boundary, and refusing the user's own folders would refuse the whole profile.
+$TrustedSids = @(
+    'S-1-5-18',      # SYSTEM
+    'S-1-5-32-544',  # Administrators
+    'S-1-3-0',       # CREATOR OWNER: whoever creates the file, here the elevated script
+    'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'  # TrustedInstaller
+)
+
+function Get-UntrustedWriter {
+    # Returns the SIDs outside $Trusted that can create, change, replace or re-permission files.
+    # Deny rules are ignored: the check errs towards refusing.
+    param([string]$OwnerSid, [object[]]$Rules, [string[]]$Trusted)
+    # WriteData, AppendData, DeleteSubdirectoriesAndFiles, Delete, ChangePermissions,
+    # TakeOwnership, GENERIC_ALL, GENERIC_WRITE.
+    $mask = 0x2 -bor 0x4 -bor 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000 -bor 0x40000000
+    $found = @()
+    # The owner can always rewrite the permissions.
+    if ($OwnerSid -and $Trusted -notcontains $OwnerSid) { $found += $OwnerSid }
+    foreach ($rule in $Rules) {
+        if ("$($rule.AccessControlType)" -ne 'Allow') { continue }
+        $sid = "$($rule.IdentityReference)"
+        if ($Trusted -contains $sid) { continue }
+        if (([int64]$rule.FileSystemRights -band $mask) -ne 0) { $found += $sid }
+    }
+    $found | Select-Object -Unique
+}
+
+function Assert-AdminOnlyWrite {
+    param([string]$LiteralPath)
+    $sidType = [Security.Principal.SecurityIdentifier]
+    $acl     = Get-Acl -LiteralPath $LiteralPath
+    $trusted = $TrustedSids + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $writers = @(Get-UntrustedWriter -OwnerSid $acl.GetOwner($sidType).Value `
+        -Rules $acl.GetAccessRules($true, $true, $sidType) -Trusted $trusted)
+    if (-not $writers.Count) { return }
+
+    $names = foreach ($sid in $writers) {
+        try { (New-Object Security.Principal.SecurityIdentifier $sid).Translate([Security.Principal.NTAccount]).Value }
+        catch { $sid }
+    }
+    $inherit = if (Test-Path -LiteralPath $LiteralPath -PathType Container) { '(OI)(CI)' } else { '' }
+    throw ("'$LiteralPath' can be changed by accounts other than administrators: $($names -join ', ').`n" +
+        "This script runs as administrator and would import whatever was put there.`n" +
+        "Keep the script and the backups in a folder only administrators can write to, such as`n" +
+        "$env:ProgramFiles\windhawk-backup, or lock this one down from an elevated prompt:`n" +
+        "    icacls `"$LiteralPath`" /setowner *S-1-5-32-544`n" +
+        "    icacls `"$LiteralPath`" /inheritance:r /grant:r `"*S-1-5-32-544:$($inherit)F`" `"*S-1-5-18:$($inherit)F`" `"*S-1-5-32-545:$($inherit)RX`"")
+}
+
+function Assert-RegFileScope {
+    # reg import writes every key a .reg file names. Only $RegKey may be touched, so every line
+    # that reg could read as a key header - [-key] deletions included - must name a key under it.
+    # Fails closed: anything unexpected is refused rather than interpreted.
+    param([string]$LiteralPath)
+    $bytes = [IO.File]::ReadAllBytes($LiteralPath)
+    # reg export always writes UTF-16 LE with a BOM; another encoding could be read differently by reg.
+    if ($bytes.Length -lt 2 -or $bytes[0] -ne 0xFF -or $bytes[1] -ne 0xFE) {
+        throw "$LiteralPath is not a UTF-16 registry export, refusing to import."
+    }
+    $text = [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+    if ($text.IndexOf([char]0) -ge 0) { throw "$LiteralPath contains NUL characters, refusing to import." }
+    $lines = @($text -split "`r`n|`r|`n")
+    if (($lines | Where-Object { $_.Trim() } | Select-Object -First 1) -ne 'Windows Registry Editor Version 5.00') {
+        throw "$LiteralPath does not start with 'Windows Registry Editor Version 5.00', refusing to import."
+    }
+    # Value lines start with " or @, hex continuations with spaces and digits; a [ after
+    # anything else is treated as a key header.
+    $allowed = '^\[-?HKEY_LOCAL_MACHINE\\SOFTWARE\\Windhawk(\\[^\[\]]*)?\]\s*$'
+    $bad = @($lines | Where-Object { $_ -match '^[^"@\w]*\[' -and $_ -notmatch $allowed })
+    if ($bad.Count) {
+        throw "$LiteralPath names keys outside $RegKey, refusing to import:`n$(($bad | Select-Object -First 5) -join "`n")"
+    }
+}
+
+function Assert-ZipEntriesInside {
+    # Runs elevated: an entry such as ..\..\Windows\System32\x.dll must not be extracted, and
+    # Expand-Archive in Windows PowerShell 5.1 is not documented to refuse one.
+    param([string]$Zip, [string]$Destination)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $root = [IO.Path]::GetFullPath($Destination).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $target = [IO.Path]::GetFullPath([IO.Path]::Combine($root, $entry.FullName))
+            if (-not $target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "$Zip has an entry outside the extraction folder, refusing: $($entry.FullName)"
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
+}
+
 function Remove-OldBackups {
     if ($Keep -le 0) { return }
     Get-ChildItem -Path $BackupDir -Filter 'windhawk-backup_*.zip' |
@@ -303,6 +412,7 @@ function Restore-WindhawkBackup {
 
     $stage = Join-Path $env:TEMP ('windhawk-restore_' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
     Write-Host "Extracting $Zip ..."
+    Assert-ZipEntriesInside -Zip $Zip -Destination $stage
     Expand-Archive -LiteralPath $Zip -DestinationPath $stage -Force
     try {
         $data = Join-Path $stage 'Data'
@@ -310,6 +420,8 @@ function Restore-WindhawkBackup {
         if (-not (Test-Path $data) -and -not (Test-Path $reg)) {
             throw "$Zip contains neither Data\ nor Windhawk.reg - not a backup made by this script."
         }
+        # Before -Clean removes anything: a refused file leaves the current state untouched.
+        if (Test-Path $reg) { Assert-RegFileScope -LiteralPath $reg }
 
         if ($Clean) {
             Write-Host 'Removing current mods (-Clean)...'
@@ -368,6 +480,10 @@ function Restore-WindhawkBackup {
 # The script writes its own log: a thrown error bypasses "*>" redirection, and after a UAC
 # relaunch the output is in another window anyway.
 New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+# Before anything is read from or written to these folders, the log included.
+foreach ($dir in @($PSScriptRoot, $BackupDir) | Select-Object -Unique) {
+    Assert-AdminOnlyWrite -LiteralPath $dir
+}
 $LogFile = Join-Path $BackupDir 'windhawk-backup.log'
 Start-Transcript -LiteralPath $LogFile -Append | Out-Null
 
@@ -394,6 +510,9 @@ try {
             $Path = $latest.FullName
         }
         if (-not (Test-Path -LiteralPath $Path)) { throw "File not found: $Path" }
+        # -Path may point outside -BackupDir: check its folder and the file itself.
+        Assert-AdminOnlyWrite -LiteralPath (Split-Path -Parent $Path)
+        Assert-AdminOnlyWrite -LiteralPath $Path
 
         Write-Host "Restoring from: $Path"
         if ($Clean) { Write-Host '-Clean: current mods will be removed before restore.' -ForegroundColor Yellow }

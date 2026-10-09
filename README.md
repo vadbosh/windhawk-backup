@@ -11,10 +11,14 @@ both, and restores them while the mods are still loaded.
 
 ## Quick start
 
-1. Download `windhawk-backup.ps1` and `windhawk-backup.cmd` into one folder,
-   for example `C:\Tools\windhawk-backup`.
-2. Double-click `windhawk-backup.cmd`, confirm UAC, press `1` for backup.
-3. The ZIP appears next to the script.
+1. Create the folder `C:\Program Files\windhawk-backup`. Explorer asks for
+   administrator rights.
+2. Download `windhawk-backup.ps1` and `windhawk-backup.cmd` into that folder.
+3. Double-click `windhawk-backup.cmd`, confirm UAC, press `1` for backup.
+4. The ZIP appears next to the script.
+
+The script refuses a folder that a standard user can write to:
+[why](#folder-permissions).
 
 On a new machine or after a reinstall: install Windhawk, double-click the
 `.cmd` again, press `2`.
@@ -53,18 +57,18 @@ powershell -ExecutionPolicy Bypass -File .\windhawk-backup.ps1 Backup
 A restore looks like this (paths are illustrative, output is real):
 
 ```text
-Restoring from: C:\Tools\windhawk-backup\windhawk-backup_20260926_180525.zip
+Restoring from: C:\Program Files\windhawk-backup\windhawk-backup_20260926_180525.zip
 Continue? (y/N): y
 Stopping Windhawk service...
 Stopping windhawk.exe processes...
 Safety backup of the current state...
-Backup saved: C:\Tools\windhawk-backup\windhawk-backup_20260926_181357_pre-restore.zip
-Extracting C:\Tools\windhawk-backup\windhawk-backup_20260926_180525.zip ...
+Backup saved: C:\Program Files\windhawk-backup\windhawk-backup_20260926_181357_pre-restore.zip
+Extracting C:\Program Files\windhawk-backup\windhawk-backup_20260926_180525.zip ...
 Copying files to C:\ProgramData\Windhawk (38 unchanged file(s) skipped)...
 Importing HKLM\SOFTWARE\Windhawk ...
 Restore complete.
 Starting Windhawk service...
-Log: C:\Tools\windhawk-backup\windhawk-backup.log
+Log: C:\Program Files\windhawk-backup\windhawk-backup.log
 ```
 
 ## What is in the ZIP
@@ -90,6 +94,29 @@ state (`mod-status`, `mod-task`). Windhawk recreates them.
 | `-WindhawkRoot` | `C:\ProgramData\Windhawk` | Windhawk data folder |
 | `-Keep` | `10` | backups to keep; `0` keeps all |
 | `-Help`, `--help` | | full help with examples |
+
+## Folder permissions
+
+The script runs as administrator: it imports `Windhawk.reg` into `HKLM` and
+copies mod DLLs that Windhawk loads into every process. So it refuses to run
+when a standard user can change the script folder, `-BackupDir`, or the `-Path`
+file and its folder. Otherwise such a user could plant a ZIP and get
+administrator rights on the next restore. Only administrators, SYSTEM and the
+current user may have write access.
+
+In a new folder directly under `C:\`, every signed-in user can change files, so
+the script refuses `C:\Tools\windhawk-backup`. Put it in
+`C:\Program Files\windhawk-backup`, or lock an existing folder down from an
+elevated prompt. The error message prints these commands with the right path:
+
+```powershell
+icacls "C:\Tools\windhawk-backup" /setowner *S-1-5-32-544
+icacls "C:\Tools\windhawk-backup" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"
+```
+
+A restore also refuses a ZIP with entries outside the extraction folder
+(`..\`), and a `Windhawk.reg` that names any key outside
+`HKLM\SOFTWARE\Windhawk`.
 
 ## Safety
 
