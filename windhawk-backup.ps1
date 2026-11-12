@@ -32,7 +32,8 @@
       SYSTEM and the current user. Otherwise a standard user could plant a ZIP whose registry
       file and mod DLLs the restore would install with administrator rights. Keep the script
       and backups in a folder such as C:\Program Files\windhawk-backup; the error message gives
-      the icacls commands to lock down an existing folder.
+      the icacls commands to lock down an existing folder. -AllowUnsafeFolder turns the refusal
+      into a warning.
       Restore also refuses a ZIP with entries outside the extraction folder, and a Windhawk.reg
       that names any key outside HKLM\SOFTWARE\Windhawk.
 
@@ -61,6 +62,11 @@
 .PARAMETER Keep
     Backup only: how many regular backups to keep in -BackupDir; older ones are deleted.
     _pre-restore files are never deleted. 0 = keep all. Default: 10.
+
+.PARAMETER AllowUnsafeFolder
+    Warn instead of refusing when accounts other than administrators, SYSTEM and the current
+    user can change the script folder, -BackupDir or the -Path file. Safe only when no one
+    else signs in to this PC: a restore installs whatever is in that folder.
 
 .PARAMETER Help
     Show this help. Same as: -h, --help, help, /?, Get-Help .\windhawk-backup.ps1 -Full
@@ -130,6 +136,8 @@ param(
     [string]$WindhawkRoot = (Join-Path $env:ProgramData 'Windhawk'),
 
     [int]$Keep = 10,
+
+    [switch]$AllowUnsafeFolder,
 
     [Alias('h')]
     [switch]$Help
@@ -321,6 +329,20 @@ function Get-AdminOnlyWriteProblem {
         "    icacls `"$LiteralPath`" /inheritance:r /grant:r `"*S-1-5-32-544:$($inherit)F`" `"*S-1-5-18:$($inherit)F`" `"*S-1-5-32-545:$($inherit)RX`"")
 }
 
+function Test-FolderAllowed {
+    # $true when the script may go on: nobody untrusted can change $LiteralPath, or the user
+    # accepted that risk with -AllowUnsafeFolder (a single-user PC, a folder under C:\).
+    param([string]$LiteralPath)
+    $problem = Get-AdminOnlyWriteProblem -LiteralPath $LiteralPath
+    if (-not $problem) { return $true }
+    if ($AllowUnsafeFolder) {
+        Write-Host "WARNING (-AllowUnsafeFolder): $problem" -ForegroundColor Yellow
+        return $true
+    }
+    Write-Host "REFUSED: $problem`nOr run again with -AllowUnsafeFolder to go on anyway." -ForegroundColor Red
+    $false
+}
+
 function Assert-RegFileScope {
     # reg import writes every key a .reg file names. Only $RegKey may be touched, so every line
     # that reg could read as a key header - [-key] deletions included - must name a key under it.
@@ -486,8 +508,7 @@ function Restore-WindhawkBackup {
 New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
 # Before anything is read from or written to these folders, the log included.
 foreach ($dir in @($PSScriptRoot, $BackupDir) | Select-Object -Unique) {
-    $problem = Get-AdminOnlyWriteProblem -LiteralPath $dir
-    if ($problem) { Write-Host "REFUSED: $problem" -ForegroundColor Red; return }
+    if (-not (Test-FolderAllowed -LiteralPath $dir)) { return }
 }
 $LogFile = Join-Path $BackupDir 'windhawk-backup.log'
 Start-Transcript -LiteralPath $LogFile -Append | Out-Null
@@ -517,8 +538,7 @@ try {
         if (-not (Test-Path -LiteralPath $Path)) { throw "File not found: $Path" }
         # -Path may point outside -BackupDir: check its folder and the file itself.
         foreach ($target in @((Split-Path -Parent $Path), $Path)) {
-            $problem = Get-AdminOnlyWriteProblem -LiteralPath $target
-            if ($problem) { Write-Host "REFUSED: $problem" -ForegroundColor Red; return }
+            if (-not (Test-FolderAllowed -LiteralPath $target)) { return }
         }
 
         Write-Host "Restoring from: $Path"

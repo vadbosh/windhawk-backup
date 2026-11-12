@@ -93,6 +93,7 @@ state (`mod-status`, `mod-task`). Windhawk recreates them.
 | `-BackupDir` | script folder | where backups and the log go |
 | `-WindhawkRoot` | `C:\ProgramData\Windhawk` | Windhawk data folder |
 | `-Keep` | `10` | backups to keep; `0` keeps all |
+| `-AllowUnsafeFolder` | off | warn instead of refusing when other users can change the folder |
 | `-Help`, `--help` | | full help with examples |
 
 ## Folder permissions
@@ -113,6 +114,10 @@ elevated prompt. The error message prints these commands with the right path:
 icacls "C:\Tools\windhawk-backup" /setowner *S-1-5-32-544
 icacls "C:\Tools\windhawk-backup" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"
 ```
+
+If no one else signs in to this PC, you can leave the folder as it is. With
+`-AllowUnsafeFolder` the script prints the same text as a warning and goes on.
+A restore still checks the ZIP and `Windhawk.reg`.
 
 A restore also refuses a ZIP with entries outside the extraction folder
 (`..\`), and a `Windhawk.reg` that names any key outside

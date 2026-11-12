@@ -94,6 +94,7 @@ Log: C:\Program Files\windhawk-backup\windhawk-backup.log
 | `-BackupDir` | папка скрипта | куда класть бэкапы и лог |
 | `-WindhawkRoot` | `C:\ProgramData\Windhawk` | папка данных Windhawk |
 | `-Keep` | `10` | сколько бэкапов хранить; `0` — все |
+| `-AllowUnsafeFolder` | выключен | предупредить, а не отказать, если папку могут менять другие пользователи |
 | `-Help`, `--help` | | полная справка с примерами |
 
 ## Права на папку
@@ -115,6 +116,11 @@ Log: C:\Program Files\windhawk-backup\windhawk-backup.log
 icacls "C:\Tools\windhawk-backup" /setowner *S-1-5-32-544
 icacls "C:\Tools\windhawk-backup" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"
 ```
+
+Если на этом компьютере больше никто не входит в систему, папку можно не
+закрывать: с `-AllowUnsafeFolder` скрипт напечатает тот же текст как
+предупреждение и продолжит работу. ZIP и `Windhawk.reg` при восстановлении
+скрипт всё равно проверит.
 
 При восстановлении скрипт также не распакует ZIP, в котором есть пути за
 пределы папки распаковки (`..\`), и не импортирует `Windhawk.reg` с ключами вне
