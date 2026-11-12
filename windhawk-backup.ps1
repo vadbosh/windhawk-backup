@@ -143,7 +143,8 @@ if ($Help -or ($Action -and @('help', '-help', '--help', '-h', '/h', '/?', '?') 
     return
 }
 if ($Action -and @('Backup', 'Restore') -notcontains $Action) {
-    throw "Unknown action '$Action'. Use Backup, Restore or -Help."
+    Write-Host "Unknown action '$Action'. Use Backup, Restore or -Help." -ForegroundColor Red
+    return
 }
 
 # Script folder, not the current directory: after a UAC relaunch the current directory is System32.
@@ -295,7 +296,10 @@ function Get-UntrustedWriter {
     $found | Select-Object -Unique
 }
 
-function Assert-AdminOnlyWrite {
+function Get-AdminOnlyWriteProblem {
+    # Returns the refusal to show when accounts other than the trusted ones can change
+    # $LiteralPath, nothing otherwise. A message rather than an exception: the user has to read
+    # it and fix the folder, and an uncaught throw would bury it in PowerShell's error record.
     param([string]$LiteralPath)
     $sidType = [Security.Principal.SecurityIdentifier]
     $acl     = Get-Acl -LiteralPath $LiteralPath
@@ -309,7 +313,7 @@ function Assert-AdminOnlyWrite {
         catch { $sid }
     }
     $inherit = if (Test-Path -LiteralPath $LiteralPath -PathType Container) { '(OI)(CI)' } else { '' }
-    throw ("'$LiteralPath' can be changed by accounts other than administrators: $($names -join ', ').`n" +
+    ("'$LiteralPath' can be changed by accounts other than administrators: $($names -join ', ').`n" +
         "This script runs as administrator and would import whatever was put there.`n" +
         "Keep the script and the backups in a folder only administrators can write to, such as`n" +
         "$env:ProgramFiles\windhawk-backup, or lock this one down from an elevated prompt:`n" +
@@ -482,7 +486,8 @@ function Restore-WindhawkBackup {
 New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
 # Before anything is read from or written to these folders, the log included.
 foreach ($dir in @($PSScriptRoot, $BackupDir) | Select-Object -Unique) {
-    Assert-AdminOnlyWrite -LiteralPath $dir
+    $problem = Get-AdminOnlyWriteProblem -LiteralPath $dir
+    if ($problem) { Write-Host "REFUSED: $problem" -ForegroundColor Red; return }
 }
 $LogFile = Join-Path $BackupDir 'windhawk-backup.log'
 Start-Transcript -LiteralPath $LogFile -Append | Out-Null
@@ -511,8 +516,10 @@ try {
         }
         if (-not (Test-Path -LiteralPath $Path)) { throw "File not found: $Path" }
         # -Path may point outside -BackupDir: check its folder and the file itself.
-        Assert-AdminOnlyWrite -LiteralPath (Split-Path -Parent $Path)
-        Assert-AdminOnlyWrite -LiteralPath $Path
+        foreach ($target in @((Split-Path -Parent $Path), $Path)) {
+            $problem = Get-AdminOnlyWriteProblem -LiteralPath $target
+            if ($problem) { Write-Host "REFUSED: $problem" -ForegroundColor Red; return }
+        }
 
         Write-Host "Restoring from: $Path"
         if ($Clean) { Write-Host '-Clean: current mods will be removed before restore.' -ForegroundColor Yellow }
